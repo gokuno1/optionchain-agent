@@ -1,0 +1,22 @@
+spring:
+  application:
+    name: upstox-optionchain
+
+scheduler:
+  enabled: true
+  index: "Nifty 50"
+
+llm:
+  enabled: true
+  # Timeout for LLM API call (seconds). Prevents long waits; increase if model is slow.
+  timeout-seconds: 90
+
+upstox:
+  baseUrl: https://api.upstox.com/v2
+  apiVersion: v2
+  userId: BN8600
+  apiKey: ${UPSTOX_API_KEY:66ceee95-61ac-4a0c-8275-ca18dd612d84}
+  apiSecret: ${UPSTOX_API_SECRET:z71yjs8tcy}
+  redirectUri: ${UPSTOX_REDIRECT_URI:https://localhost:8632}
+  # Optional: path to JSON file for token persistence (default: tokens.json in current working directory)
+  tokenFilePath: ${UPSTOX_TOKEN_FILE:}
