@@ -1,10 +1,12 @@
 package com.tradebot.upstox.service.impl;
 
+import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.math.RoundingMode;
 import java.text.DecimalFormat;
 import java.time.DayOfWeek;
 import java.time.LocalDate;
+import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
 import java.util.*;
@@ -14,6 +16,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.tradebot.upstox.auth.TokenStore;
 import com.tradebot.upstox.common.VolumeOiKeysEnum;
 import com.tradebot.upstox.dto.OptionAnalysisResponse;
@@ -21,9 +24,7 @@ import com.tradebot.upstox.dto.optionchain.OptionChainData;
 import com.tradebot.upstox.dto.optionchain.OptionChainResponse;
 import com.tradebot.upstox.dto.optionchain.OptionChainRuleSignals;
 import com.tradebot.upstox.dto.optionchain.OptionGreeks;
-import com.tradebot.upstox.llm.LlmAnalysisInput;
-import com.tradebot.upstox.llm.OptionChainAnalyst;
-import com.tradebot.upstox.llm.OptionChainLLMAnalysis;
+import com.tradebot.upstox.llm.*;
 import com.tradebot.upstox.model.OptionChainAnalysisData;
 import com.tradebot.upstox.service.OptionChainService;
 import com.upstox.ApiException;
@@ -57,7 +58,11 @@ public class OptionChainServiceImpl implements OptionChainService {
 	@Autowired
 	private OptionChainAnalyst optionChainAnalyst;
 	@Autowired
+	private QuoteRefinementAnalyst quoteRefinementAnalyst;
+	@Autowired
 	private com.fasterxml.jackson.databind.ObjectMapper objectMapper;
+	@Autowired(required = false)
+	private MarketQuoteTool marketQuoteTool;
 
 	private static final double RISK_FREE_RATE = 0.1;
 
@@ -128,13 +133,98 @@ public class OptionChainServiceImpl implements OptionChainService {
 						.build();
 				String analysisJson = objectMapper.writeValueAsString(llmInput);
 				OptionChainLLMAnalysis llmAnalysis = optionChainAnalyst.analyze(index, expiryDate, analysisJson);
-				finalResponse.setLlmAnalysis(llmAnalysis);
 				log.info("llm analysis completed");
+
+				OptionChainLLMAnalysis finalAnalysis = llmAnalysis;
+
+				if (marketQuoteTool != null
+						&& llmAnalysis != null
+						&& llmAnalysis.getTrade_strike() != null
+						&& !"NO_TRADE".equalsIgnoreCase(llmAnalysis.getTrade_strike())
+						&& llmAnalysis.getConfidence() != null
+						&& ("medium".equalsIgnoreCase(llmAnalysis.getConfidence())
+						|| "high".equalsIgnoreCase(llmAnalysis.getConfidence()))
+						&& llmAnalysis.getInstrumentType() != null
+						&& llmAnalysis.getStrikePrice() != null) {
+					try {
+						String indexName = index.equalsIgnoreCase("nifty 50") ? "NIFTY" : index;
+						String instrumentExpiryDate = resolveNextTuesdayOrMondayExpiry(accessToken);
+						InstrumentQuoteContext quoteContext = marketQuoteTool.getQuoteContext(
+								userId,
+								indexName,
+								indexName,
+								instrumentExpiryDate,
+								llmAnalysis.getInstrumentType(),
+								BigDecimal.valueOf(llmAnalysis.getStrikePrice())
+						);
+						log.info("Market quote context fetched for trade strike {}", llmAnalysis.getTrade_strike());
+
+						if (quoteRefinementAnalyst != null && quoteContext != null) {
+							String originalAnalysisJson = objectMapper.writeValueAsString(llmAnalysis);
+							String quoteContextJson = objectMapper.writeValueAsString(quoteContext);
+							finalAnalysis = quoteRefinementAnalyst.refine(indexName, instrumentExpiryDate, originalAnalysisJson, quoteContextJson);
+							log.info("llm quote-based refinement completed");
+						}
+					} catch (Exception ex) {
+						log.error("Failed to refine trade using market quote for trade strike {}: {}",
+								llmAnalysis.getTrade_strike(), ex.getMessage());
+					}
+				}
+
+				finalResponse.setLlmAnalysis(finalAnalysis);
 			} catch (Exception e) {
 				log.error("Failed to invoke LLM analysis: {}", e.getMessage());
 			}
 		}
 		return finalResponse;
+	}
+
+	private String resolveNextTuesdayOrMondayExpiry(String accessToken) {
+		LocalDate today = LocalDate.now(ZoneId.of("Asia/Kolkata"));
+		LocalDate upcomingTuesday;
+		if (today.getDayOfWeek().getValue() <= DayOfWeek.TUESDAY.getValue()) {
+			upcomingTuesday = today.with(java.time.temporal.TemporalAdjusters.nextOrSame(DayOfWeek.TUESDAY));
+		} else {
+			upcomingTuesday = today.with(java.time.temporal.TemporalAdjusters.next(DayOfWeek.TUESDAY));
+		}
+
+		// If Tuesday is a market holiday, use Monday instead.
+		LocalDate expiryDate = isMarketHoliday(upcomingTuesday, accessToken) ? upcomingTuesday.minusDays(1) : upcomingTuesday;
+		return expiryDate.format(DateTimeFormatter.ISO_LOCAL_DATE);
+	}
+
+	private boolean isMarketHoliday(LocalDate date, String accessToken) {
+		try {
+			String formattedDate = date.format(DateTimeFormatter.ISO_LOCAL_DATE);
+			String url = String.format("%s/market/holidays/%s", baseUrl, formattedDate);
+
+			HttpHeaders headers = new HttpHeaders();
+			headers.set("Accept", "application/json");
+			headers.set("Content-Type", "application/json");
+			headers.set("Authorization", "Bearer " + accessToken);
+
+			HttpEntity<String> entity = new HttpEntity<>(headers);
+			ResponseEntity<String> response = restTemplate.exchange(url, HttpMethod.GET, entity, String.class);
+
+			if (!response.getStatusCode().is2xxSuccessful() || response.getBody() == null) {
+				log.warn("Holiday API call failed for date {} with status {}", formattedDate, response.getStatusCode());
+				return false;
+			}
+
+			JsonNode root = objectMapper.readTree(response.getBody());
+			String status = root.path("status").asText("");
+			JsonNode dataNode = root.path("data");
+
+			boolean isHoliday = "success".equalsIgnoreCase(status)
+					&& dataNode.isArray()
+					&& dataNode.size() > 0;
+
+			log.info("Holiday check for date {} -> isHoliday={}", formattedDate, isHoliday);
+			return isHoliday;
+		} catch (Exception e) {
+			log.error("Failed to check market holiday for date {}: {}", date, e.getMessage());
+			return false;
+		}
 	}
 
 	private ResponseEntity<OptionChainResponse> getOptionChainResponseEntity(String index, String expiryDate, String accessToken) {
