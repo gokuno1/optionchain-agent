@@ -2,6 +2,7 @@ package com.tradebot.upstox.config;
 
 import java.time.Duration;
 
+import com.tradebot.upstox.llm.AgentDecisionAnalyst;
 import com.tradebot.upstox.llm.OptionChainAnalyst;
 import com.tradebot.upstox.llm.QuoteRefinementAnalyst;
 import dev.langchain4j.model.chat.ChatLanguageModel;
@@ -37,5 +38,10 @@ public class LlmConfig {
 	@Bean
 	public QuoteRefinementAnalyst quoteRefinementAnalyst(ChatLanguageModel ollamaMistralModel) {
 		return AiServices.create(QuoteRefinementAnalyst.class, ollamaMistralModel);
+	}
+
+	@Bean
+	public AgentDecisionAnalyst agentDecisionAnalyst(ChatLanguageModel ollamaMistralModel) {
+		return AiServices.create(AgentDecisionAnalyst.class, ollamaMistralModel);
 	}
 }

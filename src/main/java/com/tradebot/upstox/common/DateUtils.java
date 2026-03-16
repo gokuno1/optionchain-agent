@@ -46,7 +46,7 @@ public class DateUtils {
 		LocalDate today = LocalDate.now();
 		DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd");
 		DayOfWeek currentDay = today.getDayOfWeek();
-		int daysToThursday = DayOfWeek.THURSDAY.getValue() - currentDay.getValue();
+		int daysToThursday = DayOfWeek.TUESDAY.getValue() - currentDay.getValue();
 		if (daysToThursday < 0) {
 			daysToThursday += 7;
 		}

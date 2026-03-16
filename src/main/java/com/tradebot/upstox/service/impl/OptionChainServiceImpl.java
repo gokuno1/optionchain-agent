@@ -20,6 +20,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.tradebot.upstox.auth.TokenStore;
 import com.tradebot.upstox.common.VolumeOiKeysEnum;
 import com.tradebot.upstox.dto.OptionAnalysisResponse;
+import com.tradebot.upstox.dto.agent.AgentOptionChainInput;
 import com.tradebot.upstox.dto.optionchain.OptionChainData;
 import com.tradebot.upstox.dto.optionchain.OptionChainResponse;
 import com.tradebot.upstox.dto.optionchain.OptionChainRuleSignals;
@@ -177,6 +178,33 @@ public class OptionChainServiceImpl implements OptionChainService {
 			}
 		}
 		return finalResponse;
+	}
+
+	@Override
+	public Optional<AgentOptionChainInput> getOptionChainDataForAgent(String index, String expiryDate, String userId) {
+		log.info("started getOptionChain for agent");
+		Optional<String> accessTokenOpt = tokenStore.getAccessToken(userId);
+		if (accessTokenOpt.isEmpty()) {
+			return Optional.empty();
+		}
+		String accessToken = accessTokenOpt.get();
+		ResponseEntity<OptionChainResponse> response = getOptionChainResponseEntity(index, expiryDate, accessToken);
+		if (response.getBody() == null || !HttpStatus.OK.equals(response.getStatusCode()) || !"success".equals(response.getBody().getStatus())) {
+			log.info("no response from getOptionChainResponse");
+			return Optional.empty();
+		}
+		List<OptionChainData> optionChainData = response.getBody().getData();
+		if (optionChainData == null || optionChainData.isEmpty()) {
+			log.info("no Data from getOptionChainResponse");
+			return Optional.empty();
+		}
+		double spotPrice = optionChainData.get(0).getUnderlying_spot_price();
+		List<Double> strikePrices = calculateStrikePrices(spotPrice, 50, 15);
+		List<OptionChainData> filteredList = getFilteredOptionChainData(strikePrices, optionChainData);
+		Double vixVal = getLtpVix(accessToken);
+		double vix = vixVal != null ? vixVal : 0.0;
+		String expiry = optionChainData.get(0).getExpiry();
+		return Optional.of(new AgentOptionChainInput(filteredList, spotPrice, vix, expiry));
 	}
 
 	private String resolveNextTuesdayOrMondayExpiry(String accessToken) {
