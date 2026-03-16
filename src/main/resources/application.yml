@@ -17,9 +17,9 @@ llm:
 upstox:
   baseUrl: https://api.upstox.com/v2
   apiVersion: v2
-  userId: BN8600
-  apiKey: ${UPSTOX_API_KEY:66ceee95-61ac-4a0c-8275-ca18dd612d84}
-  apiSecret: ${UPSTOX_API_SECRET:z71yjs8tcy}
-  redirectUri: ${UPSTOX_REDIRECT_URI:https://localhost:8632}
+  userId: userId
+  apiKey: ${UPSTOX_API_KEY}
+  apiSecret: ${UPSTOX_API_SECRET}
+  redirectUri: ${UPSTOX_REDIRECT_URI}
   # Optional: path to JSON file for token persistence (default: tokens.json in current working directory)
   tokenFilePath: ${UPSTOX_TOKEN_FILE:}
